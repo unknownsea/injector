@@ -18,7 +18,7 @@ DWORD WINAPI MainThread(LPVOID param)
 
     while (true)
     {
-        for (int i = 0; i < 4028; i++)
+        for (int i = 0; i < 128; i++)
         {
             uintptr_t entity = *reinterpret_cast<uintptr_t*>(dwEntityList + i * 0x20);
             if (!entity) continue;
