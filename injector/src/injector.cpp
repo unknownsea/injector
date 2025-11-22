@@ -6,11 +6,24 @@
 
 bool InjectDLL(DWORD pid, const std::string& dllPath)
 {
-    // HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     HANDLE hProcess = HijackProcessHandle(pid);
-    if (!hProcess) {
-        LOG_ERROR("Failed to open target process.");
-        return false;
+
+    if (!hProcess)
+    {
+        LOG_ERROR("Hijack failed, attempting normal OpenProcess...");
+
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+        if (!hProcess)
+        {
+            LOG_ERROR("OpenProcess also failed. Cannot inject.");
+            return false;
+        }
+
+        LOG_SUCCESS("Successfully opened process using normal OpenProcess.");
+    }
+    else
+    {
+        LOG_SUCCESS("Successfully hijacked a valid process handle!");
     }
 
     LPVOID remotePath = VirtualAllocEx(
