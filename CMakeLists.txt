@@ -7,6 +7,20 @@ include_directories(
         ${CMAKE_SOURCE_DIR}/include
 )
 
+# bhop.dll
+add_library(bhop SHARED
+        dll/bhop.cpp
+)
+
+target_link_libraries(bhop
+        user32
+)
+
+set_target_properties(bhop PROPERTIES
+        PREFIX ""
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # base.dll
 add_library(base SHARED
         dll/base.cpp
