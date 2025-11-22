@@ -23,16 +23,29 @@ DWORD WINAPI MainThread(LPVOID param)
         Sleep(500);
     }
 
-    FreeConsole();
+    HWND consoleWnd = GetConsoleWindow();
+    if (consoleWnd)
+    {
+        FreeConsole();
+        PostMessage(consoleWnd, WM_CLOSE, 0, 0);
+    }
+
     FreeLibraryAndExitThread(hModule, 0);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 {
-    if (reason == DLL_PROCESS_ATTACH)
-    {
-        DisableThreadLibraryCalls(hModule);
-        CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
+    switch (reason) {
+        case DLL_PROCESS_ATTACH: {
+            DisableThreadLibraryCalls(hModule);
+            CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
+        }
+        case DLL_THREAD_ATTACH:
+        case DLL_THREAD_DETACH:
+        case DLL_PROCESS_DETACH:
+            break;
+        default:;
     }
+
     return TRUE;
 }
