@@ -1,148 +1,154 @@
-#include "../include/hijack.h"
-
-#include <cstdio>
 #include <windows.h>
-#include <winternl.h>
 #include <vector>
+#include <string>
+#include "../log_handler.hpp"
 
 #pragma comment(lib, "ntdll.lib")
 
-#ifndef STATUS_INFO_LENGTH_MISMATCH
-#define STATUS_INFO_LENGTH_MISMATCH ((NTSTATUS)0xC0000004)
-#endif
-
-#ifndef SeDebugPrivilege
-#define SeDebugPrivilege 20
-#endif
+typedef LONG NTSTATUS;
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#define STATUS_INFO_LENGTH_MISMATCH ((NTSTATUS)0xC0000004L)
+#define SystemHandleInformation 16
 
 using NtQuerySystemInformation_t = NTSTATUS(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
-using NtDuplicateObject_t = NTSTATUS(NTAPI*)(HANDLE, HANDLE, HANDLE, PHANDLE, ACCESS_MASK, ULONG, ULONG);
-using RtlAdjustPrivilege_t = NTSTATUS(NTAPI*)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+using NtDuplicateObject_t        = NTSTATUS(NTAPI*)(HANDLE, HANDLE, HANDLE, PHANDLE, ACCESS_MASK, ULONG, ULONG);
+using RtlAdjustPrivilege_t       = NTSTATUS(NTAPI*)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+using NtQueryObject_t            = NTSTATUS(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 
-#pragma pack(push, 1)
-struct LocalSystemHandleTableEntryInfoEx {
-    PVOID      Object;
-    ULONG_PTR  UniqueProcessId;
-    HANDLE     HandleValue;
-    ULONG      GrantedAccess;
-    USHORT     CreatorBackTraceIndex;
-    USHORT     ObjectTypeIndex;
-    ULONG      HandleAttributes;
-    ULONG      Reserved;
-};
-#pragma pack(pop)
+typedef struct SYSTEM_HANDLE_TABLE_ENTRY_INFO {
+    USHORT UniqueProcessId;
+    USHORT CreatorBackTraceIndex;
+    UCHAR  ObjectTypeIndex;
+    UCHAR  HandleAttributes;
+    USHORT HandleValue;
+    PVOID  Object;
+    ACCESS_MASK GrantedAccess;
+} SYSTEM_HANDLE_TABLE_ENTRY_INFO, *PSYSTEM_HANDLE_TABLE_ENTRY_INFO;
+
+typedef struct SYSTEM_HANDLE_INFORMATION {
+    ULONG NumberOfHandles;
+    SYSTEM_HANDLE_TABLE_ENTRY_INFO Handles[1];
+} SYSTEM_HANDLE_INFORMATION, *PSYSTEM_HANDLE_INFORMATION;
+
+typedef struct UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR  Buffer;
+} UNICODE_STRING, *PUNICODE_STRING;
+
+typedef struct OBJECT_TYPE_INFORMATION_MINGW {
+    UNICODE_STRING TypeName;
+    WCHAR NameBuffer[260];
+} OBJECT_TYPE_INFORMATION_MINGW;
+
+static bool IsProcessHandle(HANDLE h, NtQueryObject_t NtQueryObject)
+{
+    BYTE buf[0x2000] = {};
+    ULONG retLen = 0;
+
+    if (!NT_SUCCESS(NtQueryObject(h, 2, buf, sizeof(buf), &retLen)))
+        return false;
+
+    auto* info = reinterpret_cast<OBJECT_TYPE_INFORMATION_MINGW*>(buf);
+    std::wstring typeName(info->TypeName.Buffer, info->TypeName.Length / sizeof(WCHAR));
+    return (typeName == L"Process");
+}
 
 HANDLE HijackProcessHandle(DWORD targetPid)
 {
     HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-    if (!ntdll) return NULL;
+    if (!ntdll) {
+        LOG_ERROR("Failed to get ntdll.dll handle");
+        return nullptr;
+    }
 
-    auto NtQuerySystemInformation = reinterpret_cast<NtQuerySystemInformation_t>(
-        GetProcAddress(ntdll, "NtQuerySystemInformation"));
-    auto NtDuplicateObject = reinterpret_cast<NtDuplicateObject_t>(
-        GetProcAddress(ntdll, "NtDuplicateObject"));
-    auto RtlAdjustPrivilege = reinterpret_cast<RtlAdjustPrivilege_t>(
-        GetProcAddress(ntdll, "RtlAdjustPrivilege"));
+    const auto NtQuerySystemInformation =
+        reinterpret_cast<NtQuerySystemInformation_t>(GetProcAddress(ntdll, "NtQuerySystemInformation"));
+    const auto NtDuplicateObject =
+        reinterpret_cast<NtDuplicateObject_t>(GetProcAddress(ntdll, "NtDuplicateObject"));
+    const auto RtlAdjustPrivilege =
+        reinterpret_cast<RtlAdjustPrivilege_t>(GetProcAddress(ntdll, "RtlAdjustPrivilege"));
+    const auto NtQueryObject =
+        reinterpret_cast<NtQueryObject_t>(GetProcAddress(ntdll, "NtQueryObject"));
 
-    if (!NtQuerySystemInformation || !NtDuplicateObject || !RtlAdjustPrivilege)
-        return NULL;
+    if (!NtQuerySystemInformation || !NtDuplicateObject || !RtlAdjustPrivilege || !NtQueryObject) {
+        LOG_ERROR("Failed to resolve ntdll exports");
+        return nullptr;
+    }
 
-    BOOLEAN oldPriv = FALSE;
-    RtlAdjustPrivilege(SeDebugPrivilege, TRUE, FALSE, &oldPriv);
+    BOOLEAN old = FALSE;
+    RtlAdjustPrivilege(20, TRUE, FALSE, &old);
 
-    ULONG bufSize = 0x10000;
-    std::vector<BYTE> buffer;
-    buffer.resize(bufSize);
+    ULONG size = 0x20000;
+    std::vector<BYTE> buffer(size);
 
-    NTSTATUS status = 0;
-    while (true)
-    {
-        status = NtQuerySystemInformation(
-            /*SystemInformationClass*/ 16, // SystemHandleInformation
+    for (;;) {
+        NTSTATUS status = NtQuerySystemInformation(
+            SystemHandleInformation,
             buffer.data(),
-            bufSize,
-            &bufSize);
+            size,
+            &size
+        );
 
         if (status == STATUS_INFO_LENGTH_MISMATCH) {
-            buffer.resize(bufSize);
+            buffer.resize(size);
             continue;
         }
 
         if (!NT_SUCCESS(status)) {
-            return NULL;
+            LOG_ERROR("NtQuerySystemInformation(SystemHandleInformation) failed");
+            return nullptr;
         }
+
         break;
     }
 
-    if (buffer.size() < sizeof(ULONG_PTR) * 2)
-        return NULL;
+    auto info = reinterpret_cast<PSYSTEM_HANDLE_INFORMATION>(buffer.data());
 
-    ULONG_PTR numberOfHandles = *reinterpret_cast<ULONG_PTR*>(buffer.data());
-
-    size_t entriesOffset = sizeof(ULONG_PTR) * 2;
-    size_t entrySize = sizeof(LocalSystemHandleTableEntryInfoEx);
-
-    // bounds check
-    if (buffer.size() < entriesOffset + (entrySize * numberOfHandles))
-        ;
-
-    auto ProcessTypeIndex = 7;
-
-    for (ULONG_PTR i = 0; i < numberOfHandles; ++i)
+    for (ULONG i = 0; i < info->NumberOfHandles; i++)
     {
-        size_t offset = entriesOffset + (i * entrySize);
-        if (offset + entrySize > buffer.size())
-            break;
+        const SYSTEM_HANDLE_TABLE_ENTRY_INFO& h = info->Handles[i];
 
-        LocalSystemHandleTableEntryInfoEx* entry =
-            reinterpret_cast<LocalSystemHandleTableEntryInfoEx*>(buffer.data() + offset);
-
-        if (entry->ObjectTypeIndex != ProcessTypeIndex)
+        HANDLE owner = OpenProcess(PROCESS_DUP_HANDLE, FALSE, h.UniqueProcessId);
+        if (!owner)
             continue;
 
-        DWORD ownerPid = static_cast<DWORD>(entry->UniqueProcessId & 0xFFFFFFFF);
-
-        if (ownerPid == 0)
-            continue;
-
-        HANDLE ownerHandle = OpenProcess(PROCESS_DUP_HANDLE, FALSE, ownerPid);
-        if (!ownerHandle)
-            continue;
-
-        HANDLE duplicated = NULL;
-        NTSTATUS dupStatus = NtDuplicateObject(
-            ownerHandle,
-            entry->HandleValue,
+        HANDLE dup = nullptr;
+        NTSTATUS dupSt = NtDuplicateObject(
+            owner,
+            reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(h.HandleValue)),
             GetCurrentProcess(),
-            &duplicated,
+            &dup,
             PROCESS_ALL_ACCESS,
             0,
-            0);
-
-        CloseHandle(ownerHandle);
-
-        if (!NT_SUCCESS(dupStatus) || !duplicated)
-            continue;
-
-
-
-        DWORD dupPid = GetProcessId(duplicated);
-        // Successfully duplicated → handle is hijackable
-        printf(
-            "[HIJACKABLE] OwnerPID=%lu -> Handle=0x%X -> PointsToPID=%lu (Access=0x%X)\n",
-            ownerPid,
-            (unsigned int)(uintptr_t)entry->HandleValue,
-            dupPid,
-            entry->GrantedAccess
+            0
         );
 
+        CloseHandle(owner);
 
-        if (dupPid == targetPid) {
-            return duplicated;
+        if (!NT_SUCCESS(dupSt) || !dup)
+            continue;
+
+        if (!IsProcessHandle(dup, NtQueryObject)) {
+            CloseHandle(dup);
+            continue;
         }
 
-        CloseHandle(duplicated);
+        DWORD pointedPid = GetProcessId(dup);
+
+        if (pointedPid == targetPid)
+        {
+            LOG_SUCCESS(Log::to_string_stream(h.UniqueProcessId, " -> 0x", std::hex, static_cast<unsigned>(h.HandleValue)));
+            return dup;
+        }
+
+        CloseHandle(dup);
     }
 
-    return NULL;
+    LOG_ERROR(Log::to_string_stream(
+        "Failed to find any process handle referencing PID ",
+        targetPid
+    ));
+
+    return nullptr;
 }
