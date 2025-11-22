@@ -1,13 +1,33 @@
+#include <cstdint>
 #include <windows.h>
+#include <iostream>
 
-DWORD WINAPI MainThread(const LPVOID param)
+DWORD WINAPI MainThread(LPVOID param)
 {
     const auto hModule = static_cast<HMODULE>(param);
-    MessageBoxA(nullptr, "Injected!", "DLL", MB_OK);
+
+    AllocConsole();
+    FILE* f;
+    freopen_s(&f, "CONOUT$", "w", stdout);
+
+    std::cout << "[DLL] Press END to unload.\n";
+
+    while (true)
+    {
+        if (GetAsyncKeyState(VK_END) & 1)
+        {
+            std::cout << "[DLL] Unloading...\n";
+            break;
+        }
+
+        Sleep(500);
+    }
+
+    FreeConsole();
     FreeLibraryAndExitThread(hModule, 0);
 }
 
-BOOL APIENTRY DllMain(const HMODULE hModule, const DWORD reason, LPVOID reserved)
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
     {

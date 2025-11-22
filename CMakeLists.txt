@@ -44,6 +44,7 @@ add_executable(injector
         injector/src/injector.cpp
         injector/src/process.cpp
         injector/src/hijack.cpp
+        injector/src/map.cpp
 )
 
 target_link_libraries(injector

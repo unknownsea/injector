@@ -3,6 +3,26 @@
 #include "../include/injector.h"
 #include "../include/hijack.h"
 #include "../log_handler.hpp"
+#include "../include/map.h"
+#include <filesystem>
+#include <vector>
+#include <fstream>
+
+bool loadFileToMemory(const std::string& path, std::vector<uint8_t>& outBuffer)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file)
+        return false;
+
+    std::streamsize size = file.tellg();
+    if (size <= 0)
+        return false;
+
+    outBuffer.resize(size);
+    file.seekg(0, std::ios::beg);
+
+    return file.read(reinterpret_cast<char*>(outBuffer.data()), size).good();
+}
 
 bool InjectDLL(DWORD pid, const std::string& dllPath)
 {
@@ -10,7 +30,7 @@ bool InjectDLL(DWORD pid, const std::string& dllPath)
 
     if (!hProcess)
     {
-        LOG_ERROR("Hijack failed, attempting normal OpenProcess...");
+        LOG_ERROR("Hijack failed, attempting OpenProcess...");
 
         hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         if (!hProcess)
@@ -26,49 +46,25 @@ bool InjectDLL(DWORD pid, const std::string& dllPath)
         LOG_SUCCESS("Successfully hijacked a valid process handle!");
     }
 
-    LPVOID remotePath = VirtualAllocEx(
-        hProcess, nullptr, dllPath.size() + 1,
-        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
-    );
+    std::vector<uint8_t> buffer;
 
-    if (!remotePath) {
-        LOG_ERROR("Failed to allocate memory in remote process.");
+    std::string absDllPath = std::filesystem::absolute(dllPath).string();
+
+    if (!loadFileToMemory(absDllPath, buffer))
+    {
+        LOG_ERROR("Failed to read DLL file into memory.");
         CloseHandle(hProcess);
         return false;
     }
 
-    if (!WriteProcessMemory(hProcess, remotePath, dllPath.c_str(), dllPath.size() + 1, nullptr)) {
-        LOG_ERROR("Failed to write DLL path.");
-        VirtualFreeEx(hProcess, remotePath, 0, MEM_RELEASE);
+    if (!ManualMapDLL(hProcess, buffer.data(), buffer.size()))
+    {
+        LOG_ERROR("Manual mapping failed.");
         CloseHandle(hProcess);
         return false;
     }
 
-    auto loadLib = reinterpret_cast<LPTHREAD_START_ROUTINE>(
-        GetProcAddress(GetModuleHandleA("kernel32.dll"), "LoadLibraryA")
-    );
-
-    if (!loadLib) {
-        LOG_ERROR("Failed to resolve LoadLibraryA.");
-        CloseHandle(hProcess);
-        return false;
-    }
-
-    HANDLE hThread = CreateRemoteThread(
-        hProcess, nullptr, 0, loadLib, remotePath, 0, nullptr
-    );
-
-    if (!hThread) {
-        LOG_ERROR("Failed to create remote thread.");
-        VirtualFreeEx(hProcess, remotePath, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return false;
-    }
-
-    WaitForSingleObject(hThread, INFINITE);
-
-    CloseHandle(hThread);
+    LOG_SUCCESS("Manual mapping successful!");
     CloseHandle(hProcess);
-
     return true;
 }
