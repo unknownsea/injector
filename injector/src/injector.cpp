@@ -1,11 +1,13 @@
 #include <windows.h>
 #include <string>
 #include "../include/injector.h"
+#include "../include/hijack.h"
 #include "../log_handler.hpp"
 
 bool InjectDLL(DWORD pid, const std::string& dllPath)
 {
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    // HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    HANDLE hProcess = HijackProcessHandle(pid);
     if (!hProcess) {
         LOG_ERROR("Failed to open target process.");
         return false;

@@ -43,6 +43,7 @@ add_executable(injector
         injector/src/console.cpp
         injector/src/injector.cpp
         injector/src/process.cpp
+        injector/src/hijack.cpp
 )
 
 target_link_libraries(injector
