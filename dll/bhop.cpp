@@ -155,8 +155,10 @@ DWORD WINAPI MainThread(LPVOID param)
         if (GetAsyncKeyState(VK_SPACE)) {
             if (IsValidPtr(jump->ptr)) {
                 jump->ptr->state = 65537;
-                Sleep(1);
+                std::cout << jump->ptr->state << "\n";
+                Sleep(100);
                 jump->ptr->state = 256;
+                std::cout << jump->ptr->state << "\n";
             }
         }
     }

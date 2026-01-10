@@ -49,6 +49,21 @@ set_target_properties(example PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# examples
+add_library(cs2 SHARED
+        examples/cs2/dllmain.cpp
+        examples/cs2/sdk/schema.cpp
+)
+
+target_link_libraries(cs2
+        user32
+)
+
+set_target_properties(cs2 PROPERTIES
+        PREFIX ""
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # injector
 add_executable(injector
         injector/log_handler.hpp
